@@ -1,0 +1,873 @@
+--------------------------------------------------------------------------------
+--Rally's Blackjack Table, github.com/RallyFTW
+--Most of this code was written by MrStump (github.com/MisterStump)
+--Some references to models and things were changed. This code overhauled the
+--way cards are dealt; at the time, the dealing cards to players function only
+--dealt cards "straight-on", without taking the angle of a player's seat into
+--consideration. As of 3/20/2020, my code still functions to fix this, even
+--after the table update they did a year or so back. There's a couple of other
+--powerup functions I wrote, but other than that, most of this work belongs to
+--MrStump, to which I owe some thanks to.
+--If you're looking to implement this code (why would you?), you'll have to
+--change the GUIDs of the zones and powerups listed in this table to match the
+--things you'd like to use. It goes without saying you'll need to go through this
+--code to see what fits your table, and what you'd like to add to it.
+--
+--This code alone will not make your table run. You'll also need MrStump
+--
+--
+--------------------------------------------------------------------------------
+--[[Table of Contents:
+    1. Configuration
+    2. Powerup Detection
+    3. Powerup effects
+    4. Card Zone Counting/display
+    5. Deck Finding/Tracking
+    6. Card Dealing
+    7. Functions to find data
+    8. Button click Functions
+    9. Button creation
+]]
+function onload()
+    --[[The powerupEffectTable allows you to attach an effect to figurines as well as
+        limit who they can be used on. Combine these factors to make custom powerups.
+        The name field is the name of your powerup. Powerups can only be figurines
+        On custom models, that means you need to have it set. right click > custom > figurine
+    Available Options:
+        WHO - the 'who' field must have one of the below entries
+            "Anyone" = usuable on anyone
+            "Any Player" = usable on any play, but not the dealer
+            "Other Player" = only usuable on other players, not dealer or self
+            "Self Only" = only usuable on your own hand zone
+            "Dealer Only" = only usable on the dealer hand zone
+            "Colorname" = only usable on that color space, by anyone (ex: "Yellow")
+        EFFECT - the 'effect' field must have one of the below entries
+            "Clear" - Removes any cards or powerups in the target zone
+            "Redraw" - Removes cards and deals 2 new cards
+            "Swap" - Exchanges cards in one zone with those in another
+            "Clone" - Replaces player's own cards with those from another, leaving the origionals
+            "Reveal" - Flips over any face-down card
+            "Draw 1" - Forces individual powerup is played on to draw a card. Only works with 1.
+            "Unbusted Swap" - Checks to see if a hand is busted, and then swaps hands if it isn't.
+            "Bust" - Busts the target.
+    ]]--
+    powerupEffectTable = {
+        {name="Force Dealer to draw an additional card", who="Dealer Only", effect="Draw 1"},
+        {name="Yoshi Egg", who="Other Player", effect="Clone"},
+        {name="Banana Peel", who="Self Only", effect="Clear"},
+        {name="Swap hands with another player", who="Other Players", effect="Swap"},
+        {name="Boomerang Flower", who="Dealer Only", effect="Draw 1"},
+        {name="Boo Mushroom", who = "Dealer Only", effect="Reveal"},
+        {name="1UP Mushroom", who = "Self Only", effect="Redraw"},
+        {name="Boo", who = "Other Player", effect="Swap"},
+        {name="Boo", who = "Dealer Only", effect="Reveal"},
+        {name="Blue Yoshi Egg", who = "Dealer Only", effect="Swap"},
+        {name="Pink Yoshi Egg", who = "Dealer Only", effect="Swap"},
+        {name="F.L.U.D.D.", who = "Dealer Only", effect="Redraw"}
+  }
+
+    --The names (in quotes) should all match the names on your cards.
+    --The values should match the value of those cards.
+    --If you have powerup modifies (ex: +1 to score), it could be added here (again, figurine required)
+    --0 is reserved for Aces.
+    cardNameTable= {
+        ["Two"]=2, ["Three"]=3, ["Four"]=4, ["Five"]=5,
+        ["Six"]=6, ["Seven"]=7, ["Eight"]=8, ["Nine"]=9, ["Ten"]=10,
+        ["Jack"]=10, ["Queen"]=10, ["King"]=10, ["Ace"]=0,
+        ["White Star Bit"]=1, ["Dark Star Bit"]=-1,
+        ["Red Star Bit"]=1, ["Orange Star Bit"]=1, ["Yellow Star Bit"]=1,
+        ["Green Star Bit"]=1, ["Blue Star Bit"]=1, ["Purple Star Bit"]=1,
+        ["Pink Star Bit"]=1, ["Power Mushroom"]=0, ["Goomba"]=-3, ["Bob-Omb"]=75
+    }
+
+    coinValueTable= {
+      ["Gold Coin"]=1, ["Red Coin"]=5, ["Blue Coin"]=10
+    }
+
+    --This is what ties a scripting zone to a player/dealer
+    --color is the player's color, z is the player's scripting zone
+    --Dealer comes first!
+    objectSets = {
+        {color="Dealer", z=getObjectFromGUID("f9df8a"), },
+        {color="Pink",   z=getObjectFromGUID("a7b349"), pay=getObjectFromGUID("b9a540"), coin=getObjectFromGUID("dc4de3")},
+        {color="Purple", z=getObjectFromGUID("754369"), pay=getObjectFromGUID("b8eab5"), coin=getObjectFromGUID("0eb88f")},
+        {color="Blue",   z=getObjectFromGUID("31131e"), pay=getObjectFromGUID("4c5b2a"), coin=getObjectFromGUID("30dd2b")},
+        {color="Green",  z=getObjectFromGUID("52b5b9"), pay=getObjectFromGUID("640df8"), coin=getObjectFromGUID("89c990")},
+        {color="Yellow", z=getObjectFromGUID("cff206"), pay=getObjectFromGUID("bb28ef"), coin=getObjectFromGUID("2b5bda")},
+        {color="Orange", z=getObjectFromGUID("8ea568"), pay=getObjectFromGUID("9ae1c4"), coin=getObjectFromGUID("079147")},
+        {color="Red",    z=getObjectFromGUID("b0e9de"), pay=getObjectFromGUID("6d8886"), coin=getObjectFromGUID("e39b0c")},
+        {color="White",  z=getObjectFromGUID("60ea71"), pay=getObjectFromGUID("defc93"), coin=getObjectFromGUID("de9af1")}
+    }
+
+    playerZones = {
+        {color="DealerSmall",  z=getObjectFromGUID("ddf81a")},
+        {color="DealerLarge",  z=getObjectFromGUID("447f6c")},
+        {color="Pink",         z=getObjectFromGUID("26b5d9")},
+        {color="Purple",       z=getObjectFromGUID("d553de")},
+        {color="Blue",         z=getObjectFromGUID("2a1fd7")},
+        {color="Green",        z=getObjectFromGUID("769417")},
+        {color="Yellow",       z=getObjectFromGUID("cfd0dd")},
+        {color="Orange",       z=getObjectFromGUID("0e40e9")},
+        {color="Red",          z=getObjectFromGUID("85d96e")},
+        {color="White",        z=getObjectFromGUID("780fdb")}
+    }
+    --Object on which buttons are placed for things like "deal cards"
+    cardHandler = getObjectFromGUID("77a0c3")
+
+    --A list of infinite bags which hold decks
+    --Having multiple listings will cause one to be selected at random from the listings
+    deckBagList = {
+        getObjectFromGUID("f3ea0f"),
+    }
+    --A zone where the deck is placed. Also used in tagging the deck for identification
+    deckZone = getObjectFromGUID("885bf4")
+
+
+    goldCoinZone = getObjectFromGUID("ba83c0")
+    --findCardsToCount()
+    blackjackTimerStart()
+    createButtons()
+    checkForDeck()
+    --END OF CONFIGURATION SECTION
+end
+
+--GRIEF DETECTION SECTION
+
+
+function onObjectPickedUp(player_color, picked_up_object)
+    if Player[player_color].host==false then
+        checkIsPlayerAllowed(player_color, picked_up_object)
+    else
+        local rot = picked_up_object.getRotation()
+        local pos = picked_up_object.getPosition()
+        broadcastToColor("You picked up a " .. picked_up_object.getName() .. "." , player_color, {1,1,1})
+    end
+end
+
+function checkIsPlayerAllowed(player_color, picked_up_object)
+    for i, zone in ipairs(playerZones) do
+        local objectsInZone = zone.z.getObjects()
+        for j, zoneObject in ipairs(objectsInZone) do
+            if zoneObject == picked_up_object then
+                if zone.color ~= player_color then
+                    message = player_color .. " picked up " .. picked_up_object.getName() .. " from " .. zone.color .. "."
+                    broadcastToColor(message, "Black", {0,1,1})
+                    if zone.color == "DealerSmall" or zone.color == "DealerLarge" then
+                        Player[player_color].kick()
+                    end
+                    break
+                end
+            end
+        end
+    end
+    for i, zone in ipairs(objectSets) do
+        local objectsInZone = zone.z.getObjects()
+        for j, zoneObject in ipairs(objectsInZone) do
+            if zoneObject == picked_up_object then
+                if zone.color ~= player_color then
+                    message = player_color .. " picked up " .. picked_up_object.getName() .. " from " .. zone.color .. "."
+                    broadcastToColor(message, "Black", {0,1,1})
+                    if zone.color == "DealerSmall" or zone.color == "DealerLarge" then
+                        Player[player_color].kick()
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
+
+
+--POWERUP DETECTION SECTION
+
+
+
+
+
+--When an object is dropped by a player, we check if its name is on a powerup list
+function onObjectDropped(colorOfDropper, droppedObject)
+    for i, list in ipairs(powerupEffectTable) do
+        if list.name == droppedObject.getName() then
+            checkPowerupDropZone(colorOfDropper, droppedObject, list.who, list.effect)
+        end
+    end
+end
+
+--Triggered by above function, this determines if the powerup was dropped in a card zone (objectSets z fields)
+function checkPowerupDropZone(colorOfDropper, droppedObject, who, effect)
+    for i, set in ipairs(objectSets) do
+        local objectsInZone = set.z.getObjects()
+        for j, zoneObject in ipairs(objectsInZone) do
+            if zoneObject == droppedObject then
+                checkPowerupEffect(colorOfDropper, droppedObject, who, effect, set)
+                break
+            end
+        end
+    end
+end
+
+--Checks the logic of who should be able to utilize a powerup and its effect
+--This function is what enforces the "who" field, so powerups only trigger in the correct zones
+function checkPowerupEffect(colorOfDropper, droppedObject, who, effect, setTarget)
+    local setUser = findObjectSetFromColor(colorOfDropper)
+    if who == "Anyone" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Any Player" and setTarget ~= objectSets[1] then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Other Player" and colorOfDropper ~= setTarget.color and setTarget ~= objectSets[1] then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Self Only" and colorOfDropper == setTarget.color then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Dealer Only" and setTarget == objectSets[1] then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Pink" and setTarget.color == "Pink" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Purple" and setTarget.color == "Purple" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Blue" and setTarget.color == "Blue" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Green" and setTarget.color == "Green" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Yellow" and setTarget.color == "Yellow" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Orange" and setTarget.color == "Orange" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "Red" and setTarget.color == "Red" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    elseif who == "White" and setTarget.color == "White" then
+        activatePowerupEffect(effect, setTarget, droppedObject, setUser)
+    end
+end
+
+--Activages a given effect. setTarget is the objectSets entry for where it was dropped. setUser is the set of the dropper
+function activatePowerupEffect(effect, setTarget, powerup, setUser)
+    --Each effect gets its own section here, which triggers the functions which create the desired effect
+    --If you create a new function for "effects", you would trigger it from here.
+    if effect == "Clear" then
+        local cardsInZone = findCardsInZone(setTarget.z)
+        if #cardsInZone ~= 0 then
+            clearCards(setTarget.z)
+            destroyObject(powerup)
+        else
+            broadcastToColor("Must use powerup on a zone with cards in it.", setUser.color, {1,0.5,0.5})
+        end
+    elseif effect == "Redraw" then
+        local cardsInZone = findCardsInZone(setTarget.z)
+        if #cardsInZone ~= 0 then
+            clearCards(setTarget.z)
+            if setTarget == objectSets[1] then
+                dealDealer({1,2})
+            else
+                dealPlayer(setTarget.color, {1,2})
+            end
+            destroyObject(powerup)
+        else
+            broadcastToColor("Must use powerup on a zone with cards in it.", setUser.color, {1,0.5,0.5})
+        end
+    elseif effect == "Swap" then
+        local tableZ1 = findCardsInZone(setTarget.z)
+        local tableZ2 = findCardsInZone(setUser.z)
+        if #tableZ1 ~= 0 and #tableZ2 ~= 0 then
+            swapHandZones(setTarget.z, setUser.z, tableZ1, tableZ2)
+            destroyObject(powerup)
+        else
+            broadcastToColor("Must use powerup on a zone with cards in it while you also have cards.", setUser.color, {1,0.5,0.5})
+        end
+    elseif effect == "Clone" then
+        local tableZ1 = findCardsInZone(setTarget.z)
+        local tableZ2 = findCardsInZone(setUser.z)
+        if #tableZ1 ~= 0 and #tableZ2 ~= 0 then
+            clearCards(setUser.z)
+            cloneHandZone(setTarget.z, setUser.z)
+            destroyObject(powerup)
+        else
+            broadcastToColor("Must use powerup on a zone with cards in it while you also have cards.", setUser.color, {1,0.5,0.5})
+        end
+    --elseif effect =="Unbusted Swap" then
+    --    local tableZ1 = findCardsInZone(setUser.z)
+    --    for
+    --elseif effect == "Bust" then
+    --input code that busts player
+    --Currently I did not write any error protection onto Reveal due to laziness
+    elseif effect == "Reveal" then
+        revealHandZone(setTarget.z)
+        destroyObject(powerup)
+    elseif effect == "Draw 1" then
+        forcedCardDraw(setTarget.z)
+        destroyObject(powerup)
+    end
+end
+
+
+
+
+
+--POWERUP EFFECTS SECTION
+
+
+
+
+
+--Triggered by powerup, this switches the cards in 2 zones (zone1 and zone2)
+function swapHandZones(zone1, zone2, tableZ1, tableZ2)
+    for i, card in ipairs(tableZ1) do
+        local pos = findCardPlacement(zone2, i)
+        local rot = zone2.getRotation()
+        card.setRotation(rot)
+        card.setPosition(pos)
+        card.unlock()
+    end
+    for i, card in ipairs(tableZ2) do
+        local pos = findCardPlacement(zone1, i)
+        local rot = zone1.getRotation()
+        card.setRotation(rot)
+        card.setPosition(pos)
+        card.unlock()
+    end
+end
+
+--Clones (copies and pastes) cards from targetZone to the zone of colorUser
+function cloneHandZone(targetZone, userZone)
+    local targetCardList = findCardsInZone(targetZone)
+    if #targetCardList ~= 0 then
+        for i, card in ipairs(targetCardList) do
+            local pos = findCardPlacement(userZone, i)
+            card.clone({position=pos})
+        end
+    else
+        printToAll("ERROR: You cannot copy and empty hand. Copy Cancelled.", {1,0.1,0.1})
+    end
+end
+
+--Reveals any face-down cards
+function revealHandZone(targetZone)
+    local targetCardList = findCardsInZone(targetZone)
+    if #targetCardList ~= 0 then
+        for i, card in ipairs(targetCardList) do
+            local z = card.getRotation().z
+            if z > 15 and z < 345 then
+                card.flip()
+            end
+        end
+    else
+        printToAll("ERROR: No cards to reveal. Powerup devoured anyway.", {1,0.1,0.1})
+    end
+end
+
+--Draws a card, forced by powerup
+function forcedCardDraw(targetZone)
+    local targetCardList = findCardsInZone(targetZone)
+    local cardToDraw = #targetCardList + 1
+    local pos = findCardPlacement(targetZone, cardToDraw)
+    local rot = targetZone.getRotation()
+    placeCard(pos, rot, true)
+end
+
+
+--CARD ZONE COUNTING SECTION
+
+
+
+--Looks for any cards in the scripting zones and sends them on to obtainCardValue
+--Looks for any decks in the scripting zones and sends them on to obtainDeckValue
+--Triggers next step, addValues(), after that
+function findCardsToCount()
+    for hand, set in ipairs(objectSets) do
+        local cardList = findCardsInZone(set.z)
+        local deckList = findDecksInZone(set.z)
+        local figurineList = findFigurinesInZone(set.z)
+        if #cardList ~= 0 or #deckList ~= 0 or #figurineList ~= 0 then
+            obtainCardNames(hand, cardList, deckList, figurineList)
+        else
+            objectSets[hand].z.editButton({index=0, label="0"})
+        end
+    end
+    blackjackTimerStart()
+end
+
+--Gets a list of names from the card if they are face up
+function obtainCardNames(hand, cardList, deckList, figurineList)
+    local cardNames = {}
+    local facedownCount = 0
+    local facedownCard = nil
+    for i, card in ipairs(cardList) do
+        local z = card.getRotation().z
+        if z > 345 or z < 15 then
+            table.insert(cardNames, card.getName())
+        elseif hand == 1 then
+            facedownCount = facedownCount + 1
+            facedownCard = card
+        end
+    end
+    for i, deck in ipairs(deckList) do
+        local z = deck.getRotation().z
+        if z > 345 or z < 15 then
+        for j, card in ipairs(deck.getObjects()) do
+                table.insert(cardNames, card.nickname)
+            end
+        end
+    end
+    for i, figurine in ipairs(figurineList) do
+        table.insert(cardNames, figurine.getName())
+    end
+    addCardValues(hand, cardNames, facedownCount, facedownCard)
+end
+
+--Adds card values from their names
+function addCardValues(hand, cardNames, facedownCount, facedownCard)
+    local value = 0
+    local aceCount = 0
+    for i, card in ipairs(cardNames) do
+        for name, v in pairs(cardNameTable) do
+            if card == name then
+                value = value + v
+                if v == 0 then
+                    aceCount = aceCount + 1
+                end
+            end
+        end
+    end
+    if aceCount > 0 then
+        for i=1, aceCount do
+            if value <= 10 then
+                value = value + 11
+            else
+                value = value + 1
+            end
+        end
+    end
+    displayResult(hand, value)
+    --Checks for blackjack
+    if hand == 1 then
+        if #cardNames == 1 and facedownCount == 1 then
+            checkForBlackjack(value, facedownCard)
+        else
+            blackjackFound = false
+        end
+    end
+end
+
+--Sends the card count results to the displays
+--If you wanted special symbols to show up on 21, 21+ etc, you would add it here
+function displayResult(hand, value)
+    if value == 21 then
+        valueLabel = ":D"
+    elseif value >= 75 then
+        valueLabel = ":("
+    else
+        valueLabel = value
+    end
+    objectSets[hand].z.editButton({index=0, label=valueLabel})
+end
+
+--Guess what THIS does.
+function checkForBlackjack(value, facedownCard)
+    local facedownValue = nil
+    for name, v in pairs(cardNameTable) do
+        if name == facedownCard.getName() then
+            facedownValue = v
+        end
+    end
+    if (facedownValue==0 and value==10) or (facedownValue==10 and value==11) then
+        if blackjackFound == true then
+            facedownCard.flip()
+            broadcastToAll("Dealer has Blackjack!", {0.9,0.2,0.2})
+            blackjackFound = false
+        else
+            blackjackFound = true
+        end
+    end
+end
+
+--Restarts loop back up at countCards
+function blackjackTimerStart()
+    Timer.destroy("BlackjackGlobalTimer")
+    Timer.create({identifier="BlackjackGlobalTimer", function_name='findCardsToCount', delay=1})
+end
+
+
+
+--DECK FINDING/TRACKING SECTION
+
+
+
+
+
+--checks for current deck when the tool loads, triggered by onload
+function checkForDeck()
+    local objectsInZone = deckZone.getObjects()
+    for i, deck in ipairs(objectsInZone) do
+        if deck.tag == "Deck" then
+            mainDeck = deck
+            break
+        end
+    end
+end
+
+--marks a deck in tool's logic as "mainDeck", which is the deck dealt from
+function onObjectEnterScriptingZone(zone, object)
+    if zone == deckZone and object.tag == "Deck" then
+        mainDeck = object
+    end
+end
+
+--Activated by click function, pulls out a deck from a set of possible bags
+function obtainDeck()
+    math.randomseed(os.time())
+    local whichDeck = math.random(1, #deckBagList)
+    deckBagList[whichDeck].takeObject({
+        position=deckZone.getPosition(), rotation={0,0,180},
+        callback="shuffleNewDeck", callback_owner=Global
+    })
+end
+
+
+function shuffleNewDeck()
+    mainDeck.shuffle()
+end
+
+
+
+
+
+--CARD DEALING SECTION
+
+
+
+
+
+--Used to clear all cards and figurines out of a zone
+function clearCards(zoneToClear)
+    local objectsInZone = zoneToClear.getObjects()
+    for i, object in ipairs(objectsInZone) do
+        local tag = object.tag
+        if tag == "Card" or tag == "Figurine" or tag == "Deck" then
+            destroyObject(object)
+        end
+    end
+end
+
+--Used to clear all chips out of a zone
+function clearBets(zoneToClear)
+    local objectsInZone = zoneToClear.getObjects()
+    for i, object in ipairs(objectsInZone) do
+        local tag = object.tag
+        if tag == "Chip" then
+            destroyObject(object)
+        end
+    end
+end
+
+--Deals cards to the player. whichCard is a table with which # cards to deal
+function dealDealer(whichCard)
+    for i, v in ipairs(whichCard) do
+        local set = objectSets[1]
+        local pos = findCardPlacement(set.z, v)
+        if v ~= 2 then
+            placeDealerCards(pos, true)
+        else
+            placeDealerCards(pos, false)
+        end
+    end
+end
+
+--Deals to player using same method as dealDealer
+function dealPlayer(color, whichCard)
+    for i, v in ipairs(whichCard) do
+        local set = findObjectSetFromColor(color)
+        local pos = findCardPlacement(set.z, v)
+        local rot = set.z.getRotation()
+        placeCard(pos, rot, true)
+    end
+end
+
+function giveCoin(color)
+    local set = findObjectSetFromColor(color)
+    local pos = set.coin.getPosition()
+    local rot = set.coin.getRotation()
+    placeCoin(pos, rot)
+end
+
+--Called by dealDealer function to actually deal to dealer.
+
+function placeDealerCards(pos, flipBool)
+    if mainDeck ~= nil then
+        mainDeck.takeObject({position=pos, flip=flipBool})
+    else
+        print("ERROR: No deck found, press the New Deck button.")
+    end
+end
+
+--Called by every other function to place cards. :D
+
+function placeCard(pos, rot, flipBool)
+    if mainDeck ~= nil then
+        mainDeck.takeObject({position=pos, rotation=rot, flip=flipBool})
+    else
+        print("ERROR: No deck found, press the New Deck button.")
+    end
+end
+
+function placeCoin(pos, rot)
+    goldCoinZone.takeObject({position = pos, rotation = rot})
+end
+
+
+
+--FIND FUNCTION SECTION
+
+
+
+
+--Returns the objectSets entry for a given color
+function findObjectSetFromColor(color)
+    for i, set in ipairs(objectSets) do
+        if color == set.color then
+            return set
+        end
+    end
+end
+
+--Returns the payoutSets entry for a given zone
+function findObjectSetFromGUID(GUID)
+    for i, set in ipairs(objectSets) do
+        if GUID == set.z then
+            return set
+        end
+    end
+end
+
+--Returns any cards found in a scripting zone (zone)
+function findCardsInZone(zone)
+    local zoneObjectList = zone.getObjects()
+    local foundCards = {}
+    for i, object in ipairs(zoneObjectList) do
+        if object.tag == "Card" then
+            table.insert(foundCards, object)
+        end
+    end
+    return foundCards
+end
+
+--Returns any bags found in a scripting zone (zone)
+function findBagsInZone(zone)
+    local zoneObjectList = zone.getObjects()
+    local foundBags = {}
+    for i, object in ipairs(zoneObjectList) do
+        if object.tag == "Bag" then
+            table.insert(foundBags, object)
+        end
+    end
+    return foundBags
+end
+
+--Returns any decks in a scripting zone (zone)
+function findDecksInZone(zone)
+    local zoneObjectList = zone.getObjects()
+    local foundDecks = {}
+    for i, object in ipairs(zoneObjectList) do
+        if object.tag == "Deck" then
+            table.insert(foundDecks, object)
+        end
+    end
+    return foundDecks
+end
+
+--Returns any decks in a scripting zone (zone)
+function findFigurinesInZone(zone)
+    local zoneObjectList = zone.getObjects()
+    local foundFigurines = {}
+    for i, object in ipairs(zoneObjectList) do
+        if object.tag == "Figurine" then
+            table.insert(foundFigurines, object)
+        end
+    end
+    return foundFigurines
+end
+
+--Used to find card dealing positions, based on zone and which position the card should be in
+function findCardPlacement(zone, spot)
+    if zone == objectSets[1].z then
+        return {6.9 - 2.6 * (spot-1), 1.6, -5.01}
+    else
+        local pos = zone.getPosition()
+        local rot = zone.getRotation()
+        local newRot = rot.y - 180
+        if spot <= 3 then
+        	local oldX = pos.x+ 1 - (1 *  (spot-1))
+        	local oldZ = pos.z - 0.75
+            local newX = ((oldX - pos.x) * math.cos(math.rad(newRot))) + ((oldZ - pos.z) * math.sin(math.rad(newRot)) + pos.x)
+        	local newZ = -((oldX - pos.x) * math.sin(math.rad(newRot))) + ((oldZ - pos.z) * math.cos(math.rad(newRot))+ pos.z)
+        	return {newX, pos.y+0.5+(0.5*(spot-1)), newZ}
+        else
+        	local oldX = pos.x+ 1 - (1 *  (spot-4))
+        	local oldZ = pos.z + 0.25
+            local newX = ((oldX - pos.x) * math.cos(math.rad(newRot))) + ((oldZ - pos.z) * math.sin(math.rad(newRot)) + pos.x)
+        	local newZ = -((oldX - pos.x) * math.sin(math.rad(newRot))) + ((oldZ - pos.z) * math.cos(math.rad(newRot)) + pos.z)
+        	return {newX, pos.y+0.5+(0.5*(spot-4)), newZ}
+        end
+    end
+end
+
+
+--BUTTON CLICK FUNCTION SECTION
+
+function getIndex(zone)
+    table = zone.getButtons()
+    for i, k in table do
+        print(k[i].index)
+        print(k[i].label)
+    end
+end
+
+function clearBet(zone, color)
+    if color=="Black" or Player[color].promoted==true or Player[color].host==true then
+        clearCards(zone)
+        clearBets(zone)
+    end
+end
+
+function payBet(zone, color)
+    if color=="Black" or Player[color].promoted==true or Player[color].host==true then
+        local zoneObjects = zone.getObjects()
+        local set = findObjectSetFromGUID(zone)
+        local coinObjectList = set.coin.getObjects()
+        for j, object in ipairs(coinObjectList) do
+            if object.tag == "Bag" then
+                giveCoin(set.color)
+            end
+        end
+        for j, chip in ipairs(zoneObjects) do
+            if chip.tag == "Chip" then
+                local pos = set.pay.getPosition()
+                chip.clone({position = pos})
+            end
+            if chip.tag == "Card" or chip.tag == "Figurine" then
+                destroyObject(chip)
+            end
+        end
+    end
+end
+
+function dealButtonPressed(o, color)
+    if color=="Black" or Player[color].promoted==true or Player[color].host==true then
+        --Clears players/dealers cards
+        for i, set in pairs(objectSets) do
+            clearCards(set.z)
+        end
+        --End of clear cards
+        dealDealer({1,2})
+        --local playerList = getSeatedPlayers()
+        local playerList = {"Pink", "Purple", "Blue", "Green", "Yellow", "Orange", "Red", "White"} --debug line
+        for i, player in ipairs(playerList) do
+            local betPlaced = false
+            local set = findObjectSetFromColor(player)
+            local zoneObjectList = set.z.getObjects()
+            local coinObjectList = set.coin.getObjects()
+            for j, object in ipairs(zoneObjectList) do
+                if object.tag == "Chip" then
+                    betPlaced = true
+                    break
+                end
+            end
+            if betPlaced == true then
+                dealPlayer(player, {1,2})
+            end
+            for k, object in ipairs(coinObjectList) do
+                if object.tag == "Bag" then
+                    giveCoin(player)
+                    giveCoin(player)
+                end
+            end
+        end
+    end
+end
+
+function newDeck(o, color)
+    if color=="Black" or Player[color].promoted==true or Player[color].host==true then
+        if mainDeck ~= nil then
+            destroyObject(mainDeck)
+            obtainDeck()
+        else
+            obtainDeck()
+        end
+    end
+end
+
+function hitCard(zone, color)
+    if color=="Black" or Player[color].promoted==true or Player[color].host==true then
+        local cardsInZone = #findCardsInZone(zone)
+        local decksInZone = #findDecksInZone(zone)
+        local set = findObjectSetFromGUID(zone)
+        local pos = findCardPlacement(zone, cardsInZone + decksInZone + 1)
+        local rot = zone.getRotation()
+        placeCard(pos, rot, true)
+        if set.color ~= "Dealer" then
+            local coinObjectList = set.coin.getObjects()
+            for i, object in ipairs(coinObjectList) do
+                if object.tag == "Bag" then
+                    giveCoin(set.color)
+                end
+            end
+        end
+    end
+end
+
+
+
+
+--BUTTON CREATION SECTION
+
+
+
+
+--Button creation, trigger is in onload()
+function createButtons()
+    --Card count displays, get created first so they have index of 0 on their zones
+    for i, v in ipairs(objectSets) do
+        local pos = {0,-0.48,0.6} if i==1 then pos = {0.00,-0.48,-0.748} end
+        local rot = {0,180,0} --if i==1 then rot = {0,0,0} end
+        local scaleVector = v.z.getScale()
+        local xScale = scaleVector[1]
+        local yScale = scaleVector[2]
+        local zScale = scaleVector[3]
+        v.z.createButton({
+            label="24", click_function="hitCard", function_owner=nil,
+            position=pos, rotation=rot, scale={1/xScale,1/yScale,1/zScale},
+            alignment=3, height=700, width=700, font_size=570
+        })
+    end
+    --Pay or clear bet buttons
+    for i, v in ipairs(objectSets) do
+        if i > 1 then
+            --v.coin.createButton({
+                --label="^^^^^^\nPlace\nCoin Bag\nAbove", click_function = "do_something", function_owner=nil,
+                --position={0,-1.7,-3}, rotation={0, 180, 0}, height=1400, width=1000, font_size=240
+            --})
+            local scaleVector = v.z.getScale()
+            local xScale = scaleVector[1]
+            local yScale = scaleVector[2]
+            local zScale = scaleVector[3]
+            v.z.createButton({
+                label="X", click_function="clearBet", function_owner=nil,
+                position={0.27,-0.48,0.59}, rotation={0,180,0},
+                scale={1/xScale,1/yScale,1/zScale}, height=450, width=450, font_size=320
+            })
+            v.z.createButton({
+                label="$", click_function="payBet", function_owner=nil,
+                position={-0.27,-0.48,0.59}, rotation={0,180,0},
+                scale={1/xScale,1/yScale,1/zScale}, height=450, width=450, font_size=320
+            })
+        end
+    end
+    --Deal and deck buttons
+    cardHandler.createButton({
+        label="Deal\nCards", click_function="dealButtonPressed", function_owner=nil,
+        position={0,0.19,0}, rotation={0,0,0}, width=450, height=450, font_size=150
+    })
+    cardHandler.createButton({
+        label="New\nDeck", click_function="newDeck", function_owner=nil,
+        position={0.9,0.19,0}, rotation={0,0,0}, width=450, height=450, font_size=150
+    })
+end
